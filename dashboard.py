@@ -1,95 +1,209 @@
 # dashboard.py
 import streamlit as st
 from transformers import pipeline
+import re
 
-# Load model
+st.set_page_config(page_title="Theology Chatbox", layout="centered")
+
+# ---------------------
+# Model loader
+# ---------------------
 @st.cache_resource
-def load_model():
-    return pipeline("text-generation", model="distilgpt2")
+def load_model(model_name: str):
+    return pipeline("text-generation", model=model_name)
 
-pipe = load_model()
+# ---- HARD CODED GENERATION SETTINGS ----
+model_name = "distilgpt2"
+max_new_tokens = 90
+temperature = 0.78
+top_k = 40
+repetition_penalty = 1.9
+no_repeat_ngram_size = 3
+# ----------------------------------------
 
-st.title("📖 Theology Chatbox Box")
-st.write("You are a student discussing theology. Present your question or thought, and hear guidance from a wise teacher AI.")
+pipe = load_model(model_name)
 
-# --- Suggested Questions ---
-st.markdown("### Suggested Questions")
-suggested_question = st.radio(
-    "Click to use a question:",
-    [
-        "What do you think faith teaches us?",
-        "Why do humans seek meaning in life?",
-        "How can we reconcile doubt with belief?",
-        "What is the purpose of suffering?"
-    ]
-)
 
-# Store the chosen suggested question in session state
-if "user_input" not in st.session_state:
-    st.session_state["user_input"] = ""
+# ---------------------
+# Tone Definitions — REAL VALUE
+# ---------------------
+TONE_STYLES = {
+    "Gentle": (
+        "Speak with kindness, patience, and warmth. "
+        "Offer emotional reassurance and gentle reflection. "
+        "Use soft, calm phrasing. Avoid being sharp or blunt."
+    ),
+    "Direct": (
+        "Speak crisply and briefly. Deliver clear conclusions. "
+        "Do not decorate your language. Provide concise truths."
+    ),
+    "Academic": (
+        "Speak like a theology professor in a university. "
+        "Use structured reasoning, definitions, and doctrinal comparisons. "
+        "Avoid emotional language. Focus on conceptual clarity."
+    ),
+    "Biblical": (
+        "Speak in a poetic cadence similar to Scripture. "
+        "Use imagery, metaphors, and parable-like turns of phrase. "
+        "Write in a solemn, reverent tone."
+    ),
+}
 
-if st.button("Use this question"):
-    st.session_state["user_input"] = suggested_question
+# NEW — suggested questions per tone
+SUGGESTED_BY_TONE = {
+    "Gentle": [
+        "How do I find peace when my mind is troubled?",
+        "Why does God still love us even when we fail?",
+        "How can I learn to be kinder to myself?",
+        "How do I heal spiritually after pain?"
+    ],
+    "Direct": [
+        "What is the point of faith?",
+        "Why do people avoid spiritual responsibility?",
+        "How do I stop wasting time on meaningless things?",
+        "Is belief a decision or a feeling?"
+    ],
+    "Academic": [
+        "What is the difference between faith and epistemic justification?",
+        "How has theological interpretation of suffering changed historically?",
+        "Is there a coherent definition of the soul in doctrine?",
+        "How do different denominations define grace?"
+    ],
+    "Biblical": [
+        "Why is the wilderness a recurring theme in Scripture?",
+        "What does it mean to walk the narrow path?",
+        "How do parables illuminate divine truth?",
+        "Why does the heart appear more than the mind in Biblical language?"
+    ],
+}
 
-# Conversation history
-if "history" not in st.session_state:
-    st.session_state["history"] = []
 
-# Tone selector
+# ---------------------
+# Utility
+# ---------------------
+def split_sentences(text: str, limit: int = 4) -> str:
+    if not text:
+        return ""
+    pieces = re.split(r'(?<=[\.\?\!])\s+', text.strip())
+    if len(pieces) == 1:
+        pieces = [p for p in re.split(r'\n+', text) if p.strip()]
+    chosen = pieces[:limit]
+    result = " ".join(p.strip() for p in chosen).strip()
+    if result and result[-1] not in ".!?":
+        result = result + "."
+    return result
+
+
+def build_messages(history_objs, user_text, tone, max_history_items=6):
+    msgs = []
+    msgs.append({"role": "system", "content":
+        f"You are a human theology teacher guiding a student. "
+        f"You are not AI. Your style must follow this tone specification: {TONE_STYLES[tone]}"
+    })
+    for turn in history_objs[-max_history_items:]:
+        r = "user" if turn["role"]=="student" else "teacher"
+        msgs.append({"role": r, "content": turn["text"]})
+    msgs.append({"role": "user", "content": user_text})
+    return msgs
+
+
+# ---------------------
+# Session state init
+# ---------------------
+if "history_objs" not in st.session_state:
+    st.session_state["history_objs"] = []
+if "history_display" not in st.session_state:
+    st.session_state["history_display"] = []
+if "suggested_question" not in st.session_state:
+    st.session_state["suggested_question"] = ""
+
+
+# ---------------------
+# UI
+# ---------------------
+st.title("📖 Theology Chatbox")
+st.write("You are a student. Ask your teacher and receive spiritual guidance.")
+
 tone = st.selectbox(
     "Teacher Tone",
-    ["Gentle", "Direct", "Academic", "Biblical"]
+    ["Gentle", "Direct", "Academic", "Biblical"],
+    index=0
 )
 
-# Fixed generation settings
-max_tokens = 70
-top_k = 20
-temperature = 0.3
-repetition_penalty = 2.0
+st.markdown("### Suggested Questions (based on tone)")
+suggested_question = st.radio(
+    "Click to use a question:",
+    SUGGESTED_BY_TONE[tone],
+    index=0
+)
 
-# Input box (pre-filled with suggested question if chosen)
+if st.button("Use this question"):
+    st.session_state["suggested_question"] = suggested_question
+
 user_input = st.text_area(
     "Type your question or reflection here:",
-    value=st.session_state.get("user_input", "")
+    value=st.session_state.get("suggested_question", ""),
+    placeholder="Type your question or reflection here..."
 )
 
-# Clear conversation button
-if st.button("Clear Conversation"):
-    st.session_state["history"].clear()
+col1, col2, col3 = st.columns([1, 1, 1])
+with col1:
+    clear_btn = st.button("Clear Conversation")
+with col2:
+    submit_btn = st.button("Get Guidance")
+with col3:
+    clear_suggested = st.button("Clear Suggested")
 
-# Generate response
-if st.button("Get Guidance") and user_input:
+if clear_suggested:
+    st.session_state["suggested_question"] = ""
 
-    # Simplified stable prompt
-    prompt = f"Teacher: {user_input}\nTeacher:"
+if clear_btn:
+    st.session_state["history_objs"].clear()
+    st.session_state["history_display"].clear()
 
-    with st.spinner("Thinking..."):
-        response = pipe(
-            prompt,
-            max_new_tokens=max_tokens,
+if submit_btn and user_input.strip():
+
+    messages = build_messages(st.session_state["history_objs"], user_input, tone)
+
+    text = ""
+    for m in messages:
+        prefix = "Teacher" if m["role"]!="user" else "Student"
+        text += f"{prefix}: {m['content']}\n"
+    text += "Teacher:"  # GPT2 continues here
+
+    with st.spinner("Generating guidance..."):
+        raw = pipe(
+            text,
+            max_new_tokens=max_new_tokens,
             do_sample=True,
             top_k=top_k,
             temperature=temperature,
             repetition_penalty=repetition_penalty,
-            no_repeat_ngram_size=3
-        )[0]["generated_text"]
+            no_repeat_ngram_size=no_repeat_ngram_size,
+        )
 
-    # Clean output
-    response_clean = response.replace(prompt, "").strip()
-    sentences = response_clean.split('.')
-    response_clean = '. '.join(sentences[:3]).strip()
-    if not response_clean.endswith('.'):
-        response_clean += '.'
+    generated_text = raw[0]["generated_text"]
+
+    if generated_text.startswith(text):
+        response = generated_text[len(text):].strip()
+    else:
+        response = re.split(r"Teacher:\s*", generated_text, maxsplit=1)[-1].strip()
+
+    response_clean = split_sentences(response, limit=4)
+
+    st.session_state["history_objs"].append({"role":"student","text":user_input})
+    st.session_state["history_objs"].append({"role":"teacher","text":response_clean})
+
+    display_entry = f"**You:** {user_input}\n\n**Teacher ({tone}):** {response_clean}"
+    st.session_state["history_display"].append(display_entry)
+
+    st.session_state["suggested_question"] = ""
 
 
-    entry = f"**You:** {user_input}\n\n**Teacher:** {response_clean}"
-    st.session_state["history"].append(entry)
-    # reset user_input so text area is empty for next input
-    st.session_state["user_input"] = ""
+if st.session_state["history_display"]:
+    st.markdown("----")
+    st.markdown("### Conversation")
+    for md in st.session_state["history_display"]:
+        st.markdown(md)
+    st.markdown("----")
 
-# Show conversation history
-for h in st.session_state["history"]:
-    st.markdown(h)
-
-# Auto-scroll anchor
-st.markdown("----")
