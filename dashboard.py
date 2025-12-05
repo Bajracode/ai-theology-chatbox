@@ -2,8 +2,38 @@
 import streamlit as st
 from transformers import pipeline
 import re
+from snowflake.snowpark import Session
 
 st.set_page_config(page_title="Theology Chatbox", layout="centered")
+
+# ---------------------
+# Snowflake Connection
+# ---------------------
+@st.cache_resource
+def init_snowflake_session():
+    connection_parameters = {
+        "account": st.secrets["snowflake"]["account"],
+        "user": st.secrets["snowflake"]["user"],
+        "password": st.secrets["snowflake"]["password"],
+        "role": "ACCOUNTADMIN",
+        "warehouse": "COMPUTE_WH",
+        "database": "SNOWFLAKE_LEARNING_DB",
+        "schema": "PUBLIC",
+    }
+    session = Session.builder.configs(connection_parameters).create()
+    # Ensure table exists
+    session.sql("""
+        CREATE TABLE IF NOT EXISTS theology_chat_history (
+            id INTEGER AUTOINCREMENT,
+            user_input STRING,
+            teacher_response STRING,
+            tone STRING,
+            timestamp TIMESTAMP_LTZ DEFAULT CURRENT_TIMESTAMP
+        )
+    """).collect()
+    return session
+
+sf_session = init_snowflake_session()
 
 # ---------------------
 # Model loader
@@ -22,7 +52,6 @@ no_repeat_ngram_size = 3
 # ----------------------------------------
 
 pipe = load_model(model_name)
-
 
 # ---------------------
 # Tone Definitions
