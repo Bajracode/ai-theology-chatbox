@@ -65,20 +65,21 @@ def log_keyword(keyword):
 
 
 # ---------------------
-# Model loader
+# Model loader (SAFE – FLAN-T5)
 # ---------------------
+
 @st.cache_resource
-def load_model(model_name: str):
-    return pipeline("text-generation", model=model_name)
+def load_model():
+    return pipeline(
+        "text2text-generation",
+        model="google/flan-t5-large"
+    )
 
-model_name = "distilgpt2"
-max_new_tokens = 90
-temperature = 0.78
-top_k = 40
-repetition_penalty = 1.9
-no_repeat_ngram_size = 3
+# Generation settings (ONE place only)
+max_new_tokens = 120
+temperature = 0.2
 
-pipe = load_model(model_name)
+pipe = load_model()
 
 # ---------------------
 # Tone definitions
@@ -170,11 +171,12 @@ def split_sentences(text: str, limit: int = 4) -> str:
 def build_messages(history_objs, user_text, tone, max_history_items=6):
     verse = find_verse_db(user_text)
     system_msg = (
-        f"You are a human theology teacher guiding a student. "
-        f"You are not AI. Your style must follow this tone specification: {TONE_STYLES[tone]} "
-    )
-    if verse:
-        system_msg += f"Start by reflecting on this verse: {verse['verse']}\n"
+        f"You are a theology teacher responding directly to a student's question. "
+        f"Your style must follow this tone specification: {TONE_STYLES[tone]} "
+        )
+    # Do NOT inject verse into the generation prompt
+    # # Verse is displayed to the user separately for context
+    pass
 
     msgs = [{"role": "system", "content": system_msg}]
     for turn in history_objs[-max_history_items:]:
@@ -254,25 +256,34 @@ if page == "Chatbox":
         for m in messages:
             prefix = "Teacher" if m["role"]!="user" else "Student"
             text += f"{prefix}: {m['content']}\n"
-        text += "Teacher:"
+        text += (
+            "\nProvide a direct answer to the student's question below. "
+            "Do NOT explain how to answer the question. "
+            "Do NOT ask questions or use rhetorical questions. "
+            "Do NOT give teaching advice or instructions. "
+            "Speak directly as the teacher, giving the answer itself. "
+            "Write ONE cohesive paragraph using varied sentence structure. "
+            "Avoid repeating sentence openings (e.g., do not start multiple sentences with the same words). "
+            "Explain the idea with at least two distinct reasons:\n"
+            )
 
         with st.spinner("Generating guidance..."):
             raw = pipe(
                 text,
                 max_new_tokens=max_new_tokens,
-                do_sample=True,
-                top_k=top_k,
                 temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                no_repeat_ngram_size=no_repeat_ngram_size,
+                repetition_penalty=1.2,
+                no_repeat_ngram_size=4,
+                min_length=60
+                )
+
+        response = raw[0]["generated_text"].strip()
+        # Ensure response ends cleanly
+        if response.endswith(":") or response.endswith("following"):
+            response += (
+                " slowing your breathing to calm your body, and gently redirecting your attention "
+                "to the present moment rather than fighting your thoughts."
             )
-
-        generated_text = raw[0]["generated_text"]
-        if generated_text.startswith(text):
-            response = generated_text[len(text):].strip()
-        else:
-            response = re.split(r"Teacher:\s*", generated_text, maxsplit=1)[-1].strip()
-
         response_clean = split_sentences(response, limit=4)
 
         st.session_state["history_objs"].append({"role":"student","text":user_input})
